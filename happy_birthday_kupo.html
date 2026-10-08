@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Happy Birthday Ku Po!</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Pacifico&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%;
+    background:#05020f;
+    overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #stage {
+    position:relative;
+    width:960px; height:720px;
+    transform-origin: center center;
+    flex-shrink:0;
+  }
+  canvas { position:absolute; top:0; left:0; display:block; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="bgCanvas"   width="960" height="720"></canvas>
+  <canvas id="mainCanvas" width="960" height="720"></canvas>
+  <canvas id="fxCanvas"   width="960" height="720"></canvas>
+  <canvas id="txtCanvas"  width="960" height="720"></canvas>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   HAPPY BIRTHDAY KU PO! — Complete Canvas Animation
+   960×720 | Pure HTML5/CSS3/JS | No external assets
+═══════════════════════════════════════════════════════════════ */
+
+const W = 960, H = 720, CX = 480, CY = 360;
+
+const bgC  = document.getElementById('bgCanvas');
+const mainC= document.getElementById('mainCanvas');
+const fxC  = document.getElementById('fxCanvas');
+const txtC = document.getElementById('txtCanvas');
+const bg   = bgC.getContext('2d');
+const mc   = mainC.getContext('2d');
+const fx   = fxC.getContext('2d');
+const tc   = txtC.getContext('2d');
+
+// ─── RESPONSIVE SCALING ───────────────────────────────────────
+function scaleStage() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  document.getElementById('stage').style.transform = `scale(${s})`;
+}
+window.addEventListener('resize', scaleStage);
+scaleStage();
+
+// ─── MATH HELPERS ─────────────────────────────────────────────
+const rng     = (a,b)    => a + Math.random()*(b-a);
+const rngI    = (a,b)    => Math.floor(rng(a,b+1));
+const clamp   = (v,a,b)  => Math.max(a,Math.min(b,v));
+const lerp    = (a,b,t)  => a+(b-a)*t;
+const TAU     = Math.PI*2;
+
+const ease = {
+  out:    t => 1 - Math.pow(1-t, 3),
+  inOut:  t => t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2,
+  spring: t => { const c4=(TAU)/3; return t===0?0:t===1?1:Math.pow(2,-10*t)*Math.sin((t*10-0.75)*c4)+1; },
+  back:   t => { const c1=1.70158,c3=c1+1; return 1+c3*Math.pow(t-1,3)+c1*Math.pow(t-1,2); },
+};
+
+// ─── WEB AUDIO ────────────────────────────────────────────────
+let AC = null;
+function initAudio(){
+  try{ AC = new(window.AudioContext||window.webkitAudioContext)(); }catch(e){}
+}
+function tone(freq,type,dur,vol=0.08,delay=0){
+  if(!AC)return;
+  try{
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.connect(g); g.connect(AC.destination);
+    o.type=type; o.frequency.value=freq;
+    const t=AC.currentTime+delay;
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(vol,t+0.04);
+    g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+    o.start(t); o.stop(t+dur+0.05);
+  }catch(e){}
+}
+function sparkleSound(){ [880,1100,1320,1760,2100].forEach((f,i)=>tone(f,'sine',0.35,0.05,i*0.07)); }
+function cakeSound(){    [523,659,784,1047].forEach((f,i)=>tone(f,'sine',0.6,0.07,i*0.12)); }
+function flameSound(){   tone(440,'sine',0.5,0.06); tone(880,'sine',0.25,0.07,0.12); }
+
+// ─── PARTICLE POOL ────────────────────────────────────────────
+const PCOLORS = [
+  [255,255,255],[255,160,200],[255,220,80],[200,120,255],
+  [255,180,230],[150,200,255],[255,210,180],[200,255,220]
+];
+const PSHAPES = ['circle','circle','circle','star','heart','triangle','circle','circle'];
+
+class Particle {
+  init(fromBottom=false){
+    this.x = rng(0,W);
+    this.y = fromBottom ? H+rng(5,25) : rng(0,H);
+    const [r,g,b] = PCOLORS[rngI(0,PCOLORS.length-1)];
+    this.r=r; this.g=g; this.b=b;
+    this.shape = PSHAPES[rngI(0,PSHAPES.length-1)];
+    this.size  = rng(1,9); if(Math.random()<0.04) this.size=rng(10,16);
+    this.vx = rng(-0.4,0.4);
+    this.vy = fromBottom ? rng(-0.8,-0.3) : rng(-0.6,0.2);
+    this.ph  = rng(0,TAU);
+    this.phS = rng(0.008,0.025);
+    this.al  = rng(0.3,0.95);
+    this.alS = rng(0.003,0.009)*(Math.random()<0.5?1:-1);
+    this.glow= Math.random()<0.3;
+    this.rot = rng(0,TAU);
+    this.rotS= rng(-0.025,0.025);
+    return this;
+  }
+  update(){
+    this.ph+=this.phS;
+    this.x+=this.vx+Math.sin(this.ph)*0.35;
+    this.y+=this.vy;
+    this.al+=this.alS;
+    this.rot+=this.rotS;
+    if(this.al>0.95){this.al=0.95;this.alS*=-1;}
+    if(this.al<0.12){this.al=0.12;this.alS*=-1;}
+    if(this.y<-25||this.y>H+25||this.x<-25||this.x>W+25) this.init(this.vy<0);
+  }
+  draw(c){
+    c.save();
+    c.globalAlpha=this.al;
+    c.translate(this.x,this.y);
+    c.rotate(this.rot);
+    if(this.glow){ c.shadowBlur=this.size*5; c.shadowColor=`rgba(${this.r},${this.g},${this.b},0.8)`; }
+    c.fillStyle=`rgba(${this.r},${this.g},${this.b},${this.al})`;
+    const s=this.size;
+    if(this.shape==='circle'){ c.beginPath();c.arc(0,0,s,0,TAU);c.fill(); }
+    else if(this.shape==='heart'){ drawHeart(c,s); }
+    else if(this.shape==='triangle'){ drawTri(c,s); }
+    else{ drawStar(c,s); }
+    c.restore();
+  }
+}
+
+function drawHeart(c,r){
+  c.beginPath();
+  c.moveTo(0,-r*0.25);
+  c.bezierCurveTo(0,-r*1.0, r*1.1,-r*1.0, r*1.1,-r*0.25);
+  c.bezierCurveTo(r*1.1,r*0.3, 0,r*0.85, 0,r*0.85);
+  c.bezierCurveTo(0,r*0.85, -r*1.1,r*0.3, -r*1.1,-r*0.25);
+  c.bezierCurveTo(-r*1.1,-r*1.0, 0,-r*1.0, 0,-r*0.25);
+  c.fill();
+}
+function drawTri(c,r){
+  c.beginPath();c.moveTo(0,-r);c.lineTo(r*0.866,r*0.5);c.lineTo(-r*0.866,r*0.5);c.closePath();c.fill();
+}
+function drawStar(c,r){
+  c.beginPath();
+  for(let i=0;i<10;i++){
+    const a=i*Math.PI/5-Math.PI/2, rad=i%2?r*0.4:r;
+    i===0?c.moveTo(rad*Math.cos(a),rad*Math.sin(a)):c.lineTo(rad*Math.cos(a),rad*Math.sin(a));
+  }
+  c.closePath();c.fill();
+}
+
+// Burst particle (for group effects)
+class Burst {
+  constructor(x,y){
+    this.x=x; this.y=y;
+    const a=rng(0,TAU), spd=rng(0.8,3.0);
+    this.vx=Math.cos(a)*spd; this.vy=Math.sin(a)*spd;
+    this.r=rng(2,7);
+    this.al=rng(0.7,1.0);
+    const [cr,cg,cb]=PCOLORS[rngI(0,PCOLORS.length-1)];
+    this.col=`rgba(${cr},${cg},${cb},`;
+    this.shape=PSHAPES[rngI(0,PSHAPES.length-1)];
+    this.rot=rng(0,TAU); this.rotS=rng(-0.08,0.08);
+  }
+  update(){ this.vx*=0.97; this.vy+=0.04; this.x+=this.vx; this.y+=this.vy; this.al-=0.014; this.rot+=this.rotS; }
+  dead(){ return this.al<=0; }
+  draw(c){
+    if(this.al<=0)return;
+    c.save();c.globalAlpha=this.al;c.translate(this.x,this.y);c.rotate(this.rot);
+    c.fillStyle=this.col+this.al+')';
+    const s=this.r;
+    if(this.shape==='circle'){c.beginPath();c.arc(0,0,s,0,TAU);c.fill();}
+    else if(this.shape==='heart') drawHeart(c,s);
+    else if(this.shape==='triangle') drawTri(c,s);
+    else drawStar(c,s);
+    c.restore();
+  }
+}
+
+// ─── CAKE GEOMETRY ────────────────────────────────────────────
+// Layout constants (in design space 960×720)
+const CAKE = {
+  cx: CX,
+  baseY: 442,    // y of the bottom of the cake
+  w: 252,
+  layerH: 40,    // chocolate layer height
+  creamH: 11,    // pink cream between layers
+  layers: 3,
+};
+CAKE.halfW = CAKE.w/2;
+
+// top of layer i (0=bottom layer)
+function layerY(i, offsets) {
+  const off = offsets ? offsets[i] : 0;
+  return CAKE.baseY - (i+1)*CAKE.layerH - i*CAKE.creamH + off;
+}
+function creamY(i, offsets) {
+  // cream above layer i, below layer i+1
+  const off = offsets ? offsets[i] : 0;
+  return layerY(i,offsets) - CAKE.creamH + off;
+}
+
+// ─── CAKE DRAW ────────────────────────────────────────────────
+function drawCakeLayer(c, lx, ly, lw, lh, alpha, isBottom, isTop) {
+  c.save(); c.globalAlpha=alpha;
+
+  const grad = c.createLinearGradient(lx-lw/2, ly, lx+lw/2, ly+lh);
+  grad.addColorStop(0,'#5a2408');
+  grad.addColorStop(0.15,'#7c3810');
+  grad.addColorStop(0.5,'#6e3210');
+  grad.addColorStop(0.85,'#5a2a08');
+  grad.addColorStop(1,'#3e1a04');
+  c.fillStyle=grad;
+
+  const r = [
+    isTop?6:0, isTop?6:0,
+    isBottom?6:0, isBottom?6:0
+  ];
+  c.beginPath(); roundRectPath(c, lx-lw/2, ly, lw, lh, r); c.fill();
+
+  // highlight stripe
+  c.fillStyle='rgba(255,180,80,0.12)';
+  c.beginPath(); roundRectPath(c, lx-lw/2+5, ly+3, lw-10, lh*0.32, [2,2,0,0]); c.fill();
+
+  // bottom shadow
+  c.fillStyle='rgba(0,0,0,0.22)';
+  c.beginPath(); roundRectPath(c, lx-lw/2+2, ly+lh-6, lw-4, 6, [0,0,isBottom?4:0,isBottom?4:0]); c.fill();
+
+  // vertical texture
+  c.strokeStyle='rgba(60,20,5,0.35)'; c.lineWidth=1;
+  for(let s=1;s<5;s++){
+    const sx=lx-lw/2+s*(lw/5);
+    c.beginPath(); c.moveTo(sx,ly+5); c.lineTo(sx,ly+lh-5); c.stroke();
+  }
+  c.restore();
+}
+
+function drawPinkCream(c, lx, topY, lw, ch, alpha) {
+  c.save(); c.globalAlpha=alpha;
+  const g=c.createLinearGradient(lx-lw/2,topY,lx-lw/2,topY+ch);
+  g.addColorStop(0,'#ff70b8'); g.addColorStop(0.4,'#ff3f91'); g.addColorStop(1,'#e02070');
+  c.fillStyle=g;
+  c.beginPath(); c.roundRect(lx-lw/2, topY, lw, ch, 0); c.fill();
+  c.fillStyle='rgba(255,200,220,0.4)';
+  c.beginPath(); c.roundRect(lx-lw/2+5, topY+1, lw-10, ch*0.45, 0); c.fill();
+  c.restore();
+}
+
+function roundRectPath(c, x, y, w, h, radii){
+  if(typeof radii==='number') radii=[radii,radii,radii,radii];
+  const [tl,tr,br,bl]=radii;
+  c.moveTo(x+tl,y);
+  c.lineTo(x+w-tr,y); c.quadraticCurveTo(x+w,y,x+w,y+tr);
+  c.lineTo(x+w,y+h-br); c.quadraticCurveTo(x+w,y+h,x+w-br,y+h);
+  c.lineTo(x+bl,y+h); c.quadraticCurveTo(x,y+h,x,y+h-bl);
+  c.lineTo(x,y+tl); c.quadraticCurveTo(x,y,x+tl,y);
+  c.closePath();
+}
+
+// White cream on top
+function drawWhiteCream(c, cx, topY, w, scaleY, alpha, dropProgs) {
+  if(alpha<=0) return;
+  c.save(); c.globalAlpha=alpha;
+  const halfW=w/2;
+  const cTop=topY-18;
+
+  c.translate(cx, topY);
+  c.scale(1,scaleY);
+  c.translate(-cx, -topY);
+
+  // Body
+  const cg=c.createLinearGradient(cx-halfW,cTop,cx-halfW,topY);
+  cg.addColorStop(0,'#fffaf7'); cg.addColorStop(0.6,'#fff5ef'); cg.addColorStop(1,'#f5ece4');
+  c.fillStyle=cg;
+  c.beginPath();
+  c.moveTo(cx-halfW, topY+2);
+  // wavy bottom to stop sharp edge
+  const wSegs=10;
+  for(let i=0;i<=wSegs;i++){
+    const px=cx-halfW+i*(w/wSegs);
+    const py=topY+2+Math.sin(i*0.9)*3;
+    c.lineTo(px,py);
+  }
+  c.lineTo(cx+halfW, topY+2);
+  // top curve
+  c.bezierCurveTo(cx+halfW-15, cTop+3, cx+halfW-40, cTop-5, cx+15, cTop-7);
+  c.bezierCurveTo(cx, cTop-10, cx-20, cTop-7, cx-halfW+35, cTop-3);
+  c.bezierCurveTo(cx-halfW+15, cTop+1, cx-halfW, cTop+3, cx-halfW, topY+2);
+  c.fill();
+
+  // Highlight
+  c.fillStyle='rgba(255,255,255,0.65)';
+  c.beginPath(); c.ellipse(cx, cTop-1, halfW*0.55, 4.5, 0,0,TAU); c.fill();
+
+  // Drips
+  const dxs=[cx-halfW+22, cx-halfW+68, cx+halfW-68, cx+halfW-22];
+  const dhs=[30,42,35,26];
+  for(let d=0;d<4;d++){
+    const p=clamp(dropProgs[d],0,1); if(p<=0) continue;
+    const dh=dhs[d]*ease.out(p);
+    const dx=dxs[d];
+    const dg=c.createLinearGradient(dx,topY,dx,topY+dh);
+    dg.addColorStop(0,'#fffaf7'); dg.addColorStop(1,'#ede0d5');
+    c.fillStyle=dg;
+    c.beginPath();
+    c.moveTo(dx-5,topY);c.lineTo(dx+5,topY);
+    c.lineTo(dx+4,topY+dh-9);
+    c.arc(dx,topY+dh-6,5,0,Math.PI,false);
+    c.lineTo(dx-4,topY+dh-9); c.closePath(); c.fill();
+  }
+  c.restore();
+}
+
+// ─── CANDLE DRAW ──────────────────────────────────────────────
+function drawCandle(c, cx, topY, alpha, scaleV, offY) {
+  if(alpha<=0) return;
+  const cw=21, ch=92;
+  const cy=topY-8+offY;
+  c.save(); c.globalAlpha=alpha;
+  c.translate(cx, cy); c.scale(scaleV, scaleV);
+
+  // Soft glow behind
+  const gl=c.createRadialGradient(0,-ch/2,5,0,-ch/2,cw*2.5);
+  gl.addColorStop(0,'rgba(255,180,200,0.2)'); gl.addColorStop(1,'rgba(0,0,0,0)');
+  c.fillStyle=gl;c.beginPath();c.ellipse(0,-ch/2,cw*2.5,ch*0.9,0,0,TAU);c.fill();
+
+  // Body gradient
+  const bg2=c.createLinearGradient(-cw/2,0,cw/2,0);
+  bg2.addColorStop(0,'#f0a8c5'); bg2.addColorStop(0.25,'#ffd0e5');
+  bg2.addColorStop(0.6,'#ffb8d5'); bg2.addColorStop(1,'#e090b8');
+  c.fillStyle=bg2;
+  c.beginPath(); roundRectPath(c,-cw/2,-ch,cw,ch,[cw/2,cw/2,3,3]); c.fill();
+
+  // Diagonal stripes
+  c.save();
+  c.beginPath(); roundRectPath(c,-cw/2,-ch,cw,ch,[cw/2,cw/2,3,3]); c.clip();
+  c.strokeStyle='rgba(200,40,90,0.65)'; c.lineWidth=5.5; c.lineCap='butt';
+  for(let s=-3;s<9;s++){
+    const sx=-cw/2+s*14-ch*0.5;
+    c.beginPath(); c.moveTo(sx,-ch); c.lineTo(sx+ch+cw+5,0); c.stroke();
+  }
+  c.restore();
+
+  // Outline
+  c.strokeStyle='rgba(255,255,255,0.55)'; c.lineWidth=1.8;
+  c.beginPath(); roundRectPath(c,-cw/2,-ch,cw,ch,[cw/2,cw/2,3,3]); c.stroke();
+
+  // Sheen
+  c.fillStyle='rgba(255,255,255,0.22)';
+  c.beginPath(); roundRectPath(c,-cw/2+3,-ch+6,cw*0.38,ch-12,[cw/4,cw/4,2,2]); c.fill();
+
+  // Wick
+  c.strokeStyle='#221008'; c.lineWidth=2.2; c.lineCap='round';
+  c.beginPath(); c.moveTo(0,-ch); c.lineTo(0,-ch-10); c.stroke();
+
+  c.restore();
+}
+
+// ─── FLAME DRAW ───────────────────────────────────────────────
+function drawFlame(c, fx2, fy, alpha, sc, flicker, glowP) {
+  if(alpha<=0) return;
+  c.save(); c.globalAlpha=alpha;
+  c.translate(fx2+flicker*9, fy);
+  c.scale(sc,sc);
+
+  // Far outer glow
+  const og=c.createRadialGradient(0,8,2,0,8,36);
+  og.addColorStop(0,'rgba(255,200,60,0.45)');
+  og.addColorStop(0.4,'rgba(255,130,20,0.2)');
+  og.addColorStop(1,'rgba(255,80,0,0)');
+  c.fillStyle=og;c.beginPath();c.ellipse(0,8,36,28,0,0,TAU);c.fill();
+
+  // Mid flame
+  const mg=c.createRadialGradient(0,5,0,0,5,18);
+  mg.addColorStop(0,'rgba(255,240,160,1)');
+  mg.addColorStop(0.3,'rgba(255,200,50,0.9)');
+  mg.addColorStop(0.7,'rgba(255,120,20,0.75)');
+  mg.addColorStop(1,'rgba(255,60,0,0)');
+  c.fillStyle=mg; flamePath(c,0,0,13,22); c.fill();
+
+  // Inner core
+  const ig=c.createRadialGradient(0,6,0,0,6,9);
+  ig.addColorStop(0,'rgba(255,255,240,1)');
+  ig.addColorStop(0.4,'rgba(255,250,160,0.95)');
+  ig.addColorStop(1,'rgba(255,220,80,0)');
+  c.fillStyle=ig; flamePath(c,0,2,7,13); c.fill();
+
+  c.restore();
+}
+
+function flamePath(c,x,y,rw,rh){
+  c.beginPath();
+  c.moveTo(x, y+rh);
+  c.bezierCurveTo(x+rw*1.0, y+rh*0.5, x+rw*0.85, y-rh*0.2, x+rw*0.22, y-rh);
+  c.bezierCurveTo(x+rw*0.1, y-rh*1.12, x-rw*0.1, y-rh*1.12, x-rw*0.22, y-rh);
+  c.bezierCurveTo(x-rw*0.85, y-rh*0.2, x-rw*1.0, y+rh*0.5, x, y+rh);
+}
+
+// ─── BACKGROUND DRAW ──────────────────────────────────────────
+function drawBackground(c){
+  const g=c.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0b0520'); g.addColorStop(0.35,'#100828'); g.addColorStop(0.7,'#130b30'); g.addColorStop(1,'#0a0520');
+  c.fillStyle=g; c.fillRect(0,0,W,H);
+
+  // Nebula patches
+  [[CX*0.55,CY*0.45,280,'rgba(70,15,110,0.14)'],[CX*1.38,CY*0.75,220,'rgba(55,10,95,0.11)']].forEach(([nx,ny,nr,nc])=>{
+    const ng=c.createRadialGradient(nx,ny,10,nx,ny,nr);
+    ng.addColorStop(0,nc); ng.addColorStop(1,'rgba(0,0,0,0)');
+    c.fillStyle=ng; c.fillRect(0,0,W,H);
+  });
+}
+
+// ─── MAIN STATE MACHINE ───────────────────────────────────────
+const state = {
+  elapsed: 0,
+
+  // Line
+  lineProgress: 0,
+  lineAlpha: 0,
+
+  // Layers: alpha, offY
+  layerAlpha: [0,0,0],
+  layerOff:   [30,30,30],
+
+  // Cream
+  creamAlpha: 0, creamScaleY: 0,
+  dropProg: [0,0,0,0],
+
+  // Candle
+  candleAlpha: 0, candleScale: 0.85, candleOff: -30,
+
+  // Flame
+  flameAlpha: 0, flameScale: 0,
+  flamePhase: 0,
+
+  // Glow
+  glowPhase: 0,
+  cakeGlowAlpha: 0,
+  flameGlowAlpha: 0,
+
+  // Text
+  textPhase: 0,
+  line1Progress: 0, // 0-1 char reveal Happy Birthday
+  line2Progress: 0, // 0-1 char reveal Ku Po!
+
+  // Audio flags
+  didCakeSound: false,
+  didFlameSound: false,
+  didSparkle: false,
+
+  // Bursts
+  bursts: [],
+  nextBurst: 3.2,
+
+  // Particles
+  particles: [],
+  textParticles: [],
+};
+
+// Init particles
+for(let i=0;i<170;i++) state.particles.push(new Particle().init());
+for(let i=0;i<55;i++) state.textParticles.push(Object.assign(new Particle(), {
+  x:rng(140,820), y:rng(530,700),
+  shape:'circle', size:rng(1.5,4),
+  vy:rng(-1,-0.3), vx:rng(-0.5,0.5),
+  al:0, alS:0.008
+}));
+
+// ─── UPDATE ───────────────────────────────────────────────────
+function update(dt) {
+  const t = state.elapsed;
+
+  // Glow phases
+  state.glowPhase += dt*0.012;
+  state.flamePhase += dt*0.055;
+
+  // Line (0 → 2s)
+  {
+    const p=clamp(t/2.0,0,1);
+    state.lineProgress=ease.inOut(p);
+    state.lineAlpha=ease.out(p);
+  }
+
+  // Cake layers (2→4.5s, each +0.7s delay)
+  for(let i=0;i<3;i++){
+    const t0=2.0+i*0.72, dur=0.85;
+    const p=clamp((t-t0)/dur,0,1);
+    state.layerAlpha[i]=ease.out(p);
+    state.layerOff[i]=lerp(32,0,ease.back(p));
+  }
+  state.cakeGlowAlpha=clamp((t-2.5)/2.0,0,1);
+
+  // Audio: cake
+  if(!state.didCakeSound && t>=2.0){ cakeSound(); state.didCakeSound=true; }
+
+  // White cream (4.5→5.5s)
+  {
+    const p=clamp((t-4.5)/0.9,0,1);
+    state.creamAlpha=ease.out(p);
+    state.creamScaleY=ease.back(p);
+  }
+  // Drops
+  for(let d=0;d<4;d++){
+    const p=clamp((t-4.85-d*0.18)/0.75,0,1);
+    state.dropProg[d]=p;
+  }
+
+  // Candle (5.0→5.9s)
+  {
+    const p=clamp((t-5.0)/0.85,0,1);
+    state.candleAlpha=ease.out(p);
+    state.candleScale=lerp(0.85,1,ease.spring(clamp((t-5.0)/0.95,0,1)));
+    state.candleOff=lerp(-30,0,ease.back(p));
+  }
+
+  // Flame (6.0→7.0s)
+  {
+    const p=clamp((t-6.0)/1.0,0,1);
+    state.flameAlpha=ease.out(p);
+    state.flameScale=ease.spring(p);
+    state.flameGlowAlpha=clamp((t-6.0)/1.5,0,1);
+  }
+  if(!state.didFlameSound && t>=6.0){ flameSound(); state.didFlameSound=true; }
+
+  // Text (7→9, 9→11, 11→13)
+  state.textPhase += dt*0.05;
+  state.line1Progress = clamp((t-7.0)/4.0, 0, 1);
+  state.line2Progress = clamp((t-11.0)/2.0, 0, 1);
+  if(!state.didSparkle && state.line2Progress>=1.0){ sparkleSound(); state.didSparkle=true; }
+
+  // Bursts
+  if(t>state.nextBurst && t<14.8){
+    const bx=rng(80,880), by=rng(80,520);
+    const bs=[];
+    for(let i=0;i<rngI(8,16);i++) bs.push(new Burst(bx,by));
+    state.bursts.push(bs);
+    state.nextBurst=t+rng(1.8,3.8);
+  }
+  state.bursts.forEach(bs=>bs.forEach(b=>b.update()));
+  state.bursts=state.bursts.filter(bs=>bs.some(b=>!b.dead()));
+
+  // Particles
+  state.particles.forEach(p=>p.update());
+
+  // Text particles (only after text starts)
+  if(t>12.0){
+    state.textParticles.forEach(p=>{
+      p.ph+=p.phS; p.x+=p.vx+Math.sin(p.ph)*0.25; p.y+=p.vy;
+      p.al+=p.alS;
+      if(p.al>0.85){p.al=0.85;p.alS*=-1;}
+      if(p.al<0.05||p.y<480){
+        p.x=rng(140,820); p.y=rng(650,690); p.al=0.05; p.alS=Math.abs(p.alS);
+        p.vy=rng(-0.8,-0.3);
+      }
+    });
+  }
+}
+
+// ─── DRAW ─────────────────────────────────────────────────────
+function drawAll() {
+  const t = state.elapsed;
+
+  // --- BG CANVAS (static, drawn once or every frame for glow pulse) ---
+  bg.clearRect(0,0,W,H);
+  drawBackground(bg);
+
+  // Radial cake glow (behind cake)
+  if(state.cakeGlowAlpha>0){
+    const pulse=0.88+Math.sin(state.glowPhase*2.1)*0.12;
+    bg.save(); bg.globalAlpha=state.cakeGlowAlpha*pulse*0.65;
+    const cg=bg.createRadialGradient(CX,410,15,CX,410,230);
+    cg.addColorStop(0,'rgba(170,70,255,0.55)');
+    cg.addColorStop(0.35,'rgba(210,70,180,0.3)');
+    cg.addColorStop(1,'rgba(90,15,160,0)');
+    bg.fillStyle=cg; bg.beginPath(); bg.ellipse(CX,410,230,175,0,0,TAU); bg.fill();
+    bg.restore();
+  }
+  // Flame glow
+  if(state.flameGlowAlpha>0){
+    const pulse=0.8+Math.sin(state.flamePhase*2.5)*0.2;
+    bg.save(); bg.globalAlpha=state.flameGlowAlpha*pulse*0.75;
+    const fg=bg.createRadialGradient(CX,285,4,CX,285,110);
+    fg.addColorStop(0,'rgba(255,220,80,0.65)');
+    fg.addColorStop(0.3,'rgba(255,150,40,0.35)');
+    fg.addColorStop(1,'rgba(255,80,0,0)');
+    bg.fillStyle=fg; bg.beginPath(); bg.ellipse(CX,285,110,90,0,0,TAU); bg.fill();
+    bg.restore();
+  }
+
+  // --- MAIN CANVAS ---
+  mc.clearRect(0,0,W,H);
+
+  // Back particles
+  state.particles.filter(p=>p.y<390).forEach(p=>p.draw(mc));
+
+  // Bursts
+  state.bursts.forEach(bs=>bs.forEach(b=>b.draw(mc)));
+
+  // ── CAKE ──
+  const cx=CAKE.cx;
+  // Compute layer top Ys with offsets
+  for(let i=0;i<3;i++){
+    const al=state.layerAlpha[i]; if(al<=0) continue;
+    const off=state.layerOff[i];
+    const ly=CAKE.baseY-(i+1)*CAKE.layerH-i*CAKE.creamH+off;
+    // Pink cream above this layer
+    if(i>0 && state.layerAlpha[i-1]>0){
+      const cy2=ly+CAKE.layerH+state.layerOff[i-1];
+      const cAl=Math.min(al, state.layerAlpha[i-1]);
+      drawPinkCream(mc, cx, cy2, CAKE.w, CAKE.creamH, cAl);
+    }
+    // Cake body
+    drawCakeLayer(mc, cx, ly, CAKE.w, CAKE.layerH, al, i===0, i===2);
+  }
+
+  // Top pink cream (above layer 2)
+  if(state.layerAlpha[2]>0){
+    const off2=state.layerOff[2];
+    const topLy=CAKE.baseY-3*CAKE.layerH-2*CAKE.creamH+off2;
+    const cAl=state.layerAlpha[2]*clamp((t-3.5)/0.5,0,1);
+    drawPinkCream(mc, cx, topLy-CAKE.creamH, CAKE.w, CAKE.creamH, cAl);
+  }
+
+  // White cream on top of cake
+  const topLyY = CAKE.baseY-3*CAKE.layerH-2*CAKE.creamH + state.layerOff[2];
+  const creamTop = topLyY - CAKE.creamH;
+  drawWhiteCream(mc, cx, creamTop, CAKE.w, state.creamScaleY, state.creamAlpha*state.layerAlpha[2], state.dropProg);
+
+  // Base line
+  if(state.lineAlpha>0){
+    const lw=290*state.lineProgress;
+    mc.save();
+    mc.globalAlpha=state.lineAlpha;
+    mc.shadowBlur=12; mc.shadowColor='rgba(255,255,255,0.55)';
+    mc.strokeStyle='rgba(255,255,255,0.92)'; mc.lineWidth=5; mc.lineCap='round';
+    mc.beginPath(); mc.moveTo(CX-lw/2, CAKE.baseY+5); mc.lineTo(CX+lw/2, CAKE.baseY+5); mc.stroke();
+    mc.restore();
+  }
+
+  // Candle
+  const candleTopOffset = creamTop - state.layerOff[2];
+  drawCandle(mc, cx, creamTop, state.candleAlpha, state.candleScale, state.candleOff);
+
+  // Candle tip Y for flame
+  const cw=21, ch=92;
+  const candleBaseY = creamTop + state.candleOff;
+  const flickerX = Math.sin(state.flamePhase*3.8)*0.08 + Math.sin(state.flamePhase*5.6)*0.05;
+  const flameY = candleBaseY - ch*state.candleScale - 6;
+  drawFlame(mc, cx, flameY, state.flameAlpha, state.flameScale, flickerX, state.flameGlowAlpha);
+
+  // Front particles
+  state.particles.filter(p=>p.y>=390).forEach(p=>p.draw(mc));
+
+  // --- FX CANVAS (text particles) ---
+  fx.clearRect(0,0,W,H);
+  if(t>12.0) state.textParticles.forEach(p=>p.draw(fx));
+
+  // --- TEXT CANVAS ---
+  tc.clearRect(0,0,W,H);
+  if(t>=7.0) drawText(tc, t);
+}
+
+// ─── TEXT RENDERING ───────────────────────────────────────────
+function drawText(c, t) {
+  c.save();
+  const glowPulse=15+Math.sin(state.textPhase*1.8)*6;
+  const glowAlpha=0.75+Math.sin(state.textPhase*1.4)*0.15;
+
+  const FONT = "bold 74px 'Great Vibes', cursive";
+  c.font = FONT;
+
+  const textY1 = 580;
+  const textY2 = 655;
+
+  // Line 1: "Happy Birthday"
+  if(t >= 7.0 && state.line1Progress > 0){
+    drawRevealText(c, 'Happy Birthday', CX, textY1, state.line1Progress, glowPulse, glowAlpha);
+  }
+  // Line 2: "Ku Po!"
+  if(t >= 11.0 && state.line2Progress > 0){
+    drawRevealText(c, 'Ku Po!', CX, textY2, state.line2Progress, glowPulse, glowAlpha);
+  }
+
+  c.restore();
+}
+
+function drawRevealText(c, text, cx, cy, progress, glowStr, glowA) {
+  c.font = "bold 74px 'Great Vibes', cursive";
+  c.textAlign = 'left';
+  c.textBaseline = 'middle';
+
+  const totalChars = text.length;
+  const revealF = progress * totalChars;
+  const revealedFull = Math.floor(revealF);
+  const partial = revealF - revealedFull;
+
+  // Measure total width for centering
+  c.textAlign = 'left';
+  let totalW = 0;
+  const charWidths = [];
+  for(let i=0;i<totalChars;i++){
+    const w = c.measureText(text[i]).width;
+    charWidths.push(w);
+    totalW += w;
+  }
+  let curX = cx - totalW/2;
+
+  for(let i=0;i<totalChars;i++){
+    const cw=charWidths[i];
+    const charCX=curX+cw/2;
+    const isRevealed = i < revealedFull;
+    const isPartial = i === revealedFull;
+    const al = isRevealed ? 1.0 : (isPartial ? partial : 0);
+    if(al <= 0){ curX+=cw; continue; }
+    const sc = lerp(0.92, 1.0, al);
+
+    c.save();
+    c.globalAlpha = al;
+    c.translate(charCX, cy);
+    c.scale(sc, sc);
+
+    // Outer bloom
+    c.shadowBlur = glowStr*2.5;
+    c.shadowColor = `rgba(255,140,200,${glowA*0.35})`;
+    c.fillStyle = 'rgba(255,140,200,0.22)';
+    c.fillText(text[i], -cw/2, 0);
+
+    // Mid glow
+    c.shadowBlur = glowStr;
+    c.shadowColor = `rgba(255,180,220,${glowA*0.7})`;
+    c.fillStyle = 'rgba(255,200,230,0.55)';
+    c.fillText(text[i], -cw/2, 0);
+
+    // Main text fill
+    c.shadowBlur = 8;
+    c.shadowColor = 'rgba(255,120,180,0.9)';
+    const tg = c.createLinearGradient(-cw/2,-37,cw/2,37);
+    tg.addColorStop(0,'#ffffff');
+    tg.addColorStop(0.35,'#fff0f8');
+    tg.addColorStop(0.7,'#ffd0ec');
+    tg.addColorStop(1,'#ffb8e0');
+    c.fillStyle = tg;
+    c.fillText(text[i], -cw/2, 0);
+
+    c.restore();
+    curX += cw;
+  }
+}
+
+// ─── ANIMATION LOOP ───────────────────────────────────────────
+let startTS = null, lastTS = 0;
+
+function loop(ts) {
+  if(!startTS) startTS = ts;
+  const elapsed = (ts - startTS) / 1000;
+  const dt = Math.min((ts - lastTS) / 16.667, 4);
+  lastTS = ts;
+
+  state.elapsed = elapsed;
+  update(dt);
+  drawAll();
+
+  requestAnimationFrame(loop);
+}
+
+// ─── INIT ─────────────────────────────────────────────────────
+function init(){
+  initAudio();
+  requestAnimationFrame(loop);
+}
+
+document.addEventListener('click', ()=>{ if(!AC) initAudio(); },{once:true});
+document.addEventListener('touchstart', ()=>{ if(!AC) initAudio(); },{once:true, passive:true});
+window.addEventListener('load', init);
+</script>
+</body>
+</html>
